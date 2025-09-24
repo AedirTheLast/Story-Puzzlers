@@ -1,60 +1,63 @@
+require("dotenv").config(); // Carica variabili da .env
 const express = require("express");
 const { PrismaClient } = require("@prisma/client");
-const { Client } = require("pg");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Mostra se DATABASE_URL è letta correttamente
+// Controllo variabile d'ambiente DATABASE_URL
 console.log("DATABASE_URL:", process.env.DATABASE_URL ? "✅ trovata" : "❌ non trovata");
 
-// Prisma (per connettersi a Supabase)
+// Inizializzazione Prisma
 let prisma;
 try {
-  prisma = new PrismaClient();
+  prisma = new PrismaClient({
+    datasources: {
+      db: {
+        url: process.env.DATABASE_URL,
+      },
+    },
+  });
   console.log("Prisma inizializzato ✅");
+
+  // Test rapido di connessione
+  prisma.$queryRaw`SELECT 1`
+    .then(() => console.log("Connessione al database funzionante ✅"))
+    .catch(err => console.error("Errore test DB ❌", err.stack));
 } catch (err) {
   console.error("Prisma non inizializzato:", err.message);
 }
 
-// Connessione diretta al database PostgreSQL (per test rapido)
-const client = new Client({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false, // richiesto da Supabase
-  },
-});
-
-client.connect()
-  .then(() => console.log("✅ Connessione al database riuscita"))
-  .catch(err => console.error("❌ Errore di connessione:", err.stack));
-
-// Rotta di test
+// Rotta principale di test
 app.get("/", async (req, res) => {
-  let dbStatus = "Non connesso al DB";
+  if (!prisma) return res.status(500).send("Prisma non inizializzato ❌");
 
-  // Verifica connessione con Prisma
-  if (prisma) {
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      dbStatus = "DB connesso correttamente con Prisma ✅";
-    } catch (err) {
-      dbStatus = "Errore connessione DB Prisma ❌";
-    }
-  }
-
-  // Verifica connessione diretta a PostgreSQL
   try {
-    const result = await client.query("SELECT NOW()");
-    dbStatus += `<br>DB Postgres connesso: ${result.rows[0].now}`;
+    const result = await prisma.$queryRaw`SELECT NOW()`;
+    res.send(`Story Puzzlers è online 🚀<br>Database connesso: ${result[0].now}`);
   } catch (err) {
-    dbStatus += `<br>Errore DB Postgres: ${err.message}`;
+    res.status(500).send("Errore database: " + err.message);
   }
-
-  res.send(`Story Puzzlers è online 🚀<br>${dbStatus}`);
 });
 
 // Avvio server
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server avviato su http://localhost:${PORT}`);
 });
+
+// Gestione chiusura server e Prisma
+const gracefulShutdown = async () => {
+  console.log("\nChiusura server...");
+  if (prisma) {
+    await prisma.$disconnect();
+    console.log("Prisma disconnesso ✅");
+  }
+  server.close(() => {
+    console.log("Server chiuso ✅");
+    process.exit(0);
+  });
+};
+
+// Cattura interruzioni del processo (CTRL+C, kill)
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
